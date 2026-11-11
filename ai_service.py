@@ -8,12 +8,16 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-client = genai.Client(
-    api_key=os.getenv("GEMINI_API_KEY")
-)
+api_key = os.getenv("GEMINI_API_KEY")
+
+# Initialize Gemini only when an API key is available
+client = genai.Client(api_key=api_key) if api_key else None
 
 
 def analyze_issue(title: str, description: str):
+
+    if client is None:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
 
     prompt = f"""
     Analyze this software issue.
@@ -55,6 +59,7 @@ def analyze_issue(title: str, description: str):
             )
 
             if temporary_error and attempt < max_retries - 1:
+
                 wait_time = 2 ** (attempt + 1)
 
                 print(
@@ -68,3 +73,4 @@ def analyze_issue(title: str, description: str):
                 raise RuntimeError(
                     f"Gemini AI analysis failed: {error_message}"
                 )
+
