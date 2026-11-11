@@ -1,0 +1,4 @@
+venv/                   # This prevents your database password from being uploaded to GitHub.
+__pycache__/
+.pytest_cache/
+.env
