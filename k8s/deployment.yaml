@@ -1,0 +1,26 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devtrack-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: devtrack-ai
+  template:
+    metadata:
+      labels:
+        app: devtrack-ai
+    spec:
+      containers:
+        - name: devtrack-ai
+          image: devtrack-ai:v1
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: devtrack-config
+            - secretRef:
+                name: devtrack-secret
+          ports:
+            - containerPort: 8000

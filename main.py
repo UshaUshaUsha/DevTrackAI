@@ -2,15 +2,16 @@
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-
+from fastapi.middleware.cors import CORSMiddleware
 from ai_service import analyze_issue
 from database import engine, Base
 from dependencies import get_db
 
 from schemas import IssueCreate, IssueResponse
 from user_schemas import UserCreate, UserResponse, UserLogin
+from project_schemas import ProjectCreate, ProjectUpdate, ProjectResponse
 
-from models import User, Issue, AIAnalysis
+from models import User, Issue, AIAnalysis, Project, Task
 
 from crud import (
     create_issue,
@@ -20,16 +21,39 @@ from crud import (
     delete_user_issue
 )
 
+from project_crud import (
+    create_project,
+    get_user_projects,
+    get_project,
+    update_project,
+    delete_project
+)
+from task_schemas import TaskCreate, TaskUpdate, TaskResponse
+
+from task_crud import (
+    create_task,
+    get_user_tasks,
+    get_task,
+    update_task,
+    delete_task
+)
+
 from user_crud import create_user, get_user_by_email
 from auth import verify_password, create_access_token
 from security import get_current_user
 
 
-# Create database tables
+# CREATE DATABASE TABLES
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="DevTrackAI")
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # HOME
 @app.get("/")
@@ -81,6 +105,10 @@ def login_user(
     }
 
 
+# ==========================================
+# ISSUE MANAGEMENT APIs
+# ==========================================
+
 # CREATE ISSUE
 @app.post("/issues", response_model=IssueResponse)
 def create_new_issue(
@@ -88,6 +116,18 @@ def create_new_issue(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if issue.project_id is not None:
+        project = db.query(Project).filter(
+            Project.id == issue.project_id,
+            Project.owner_id == current_user.id
+        ).first()
+
+        if project is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Project not found"
+            )
+
     return create_issue(
         db,
         issue,
@@ -157,6 +197,18 @@ def edit_issue(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if issue.project_id is not None:
+        project = db.query(Project).filter(
+            Project.id == issue.project_id,
+            Project.owner_id == current_user.id
+        ).first()
+
+        if project is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Project not found"
+            )
+
     updated = update_user_issue(
         db,
         issue_id,
@@ -197,7 +249,11 @@ def remove_issue(
     }
 
 
-# AI ISSUE ANALYSIS AND AUTOMATIC PRIORITY UPDATE
+# ==========================================
+# AI ISSUE ANALYSIS
+# ==========================================
+
+# AI ANALYSIS AND AUTOMATIC PRIORITY UPDATE
 @app.post("/issues/{issue_id}/analyze")
 def analyze_issue_endpoint(
     issue_id: int,
@@ -217,13 +273,11 @@ def analyze_issue_endpoint(
         )
 
     try:
-        # Analyze issue using Gemini
         analysis = analyze_issue(
             title=issue.title,
             description=issue.description
         )
 
-        # Validate suggested priority
         suggested_priority = analysis.get(
             "suggested_priority"
         )
@@ -236,7 +290,6 @@ def analyze_issue_endpoint(
             issue.priority = suggested_priority
             priority_updated = True
 
-        # Save AI analysis in MySQL
         saved_analysis = AIAnalysis(
             issue_id=issue.id,
             category=analysis["category"],
@@ -315,8 +368,9 @@ def get_saved_analysis(
     }
 
 
-
-# AI-POWERED DASHBOARD SUMMARY
+# ==========================================
+# DASHBOARD SUMMARY
+# ==========================================
 
 @app.get("/dashboard/summary")
 def dashboard_summary(
@@ -341,7 +395,6 @@ def dashboard_summary(
         Issue.user_id == current_user.id
     ).group_by(Issue.priority).all()
 
-    # Retrieve saved AI analyses for this user's issues
     analyses = db.query(AIAnalysis).join(
         Issue,
         AIAnalysis.issue_id == Issue.id
@@ -363,14 +416,18 @@ def dashboard_summary(
     )
 
     high_priority = next(
-        (count for priority, count in priority_counts
-         if priority == "High"),
+        (
+            count for priority, count in priority_counts
+            if priority == "High"
+        ),
         0
     )
 
     open_issues = next(
-        (count for status, count in status_counts
-         if status.lower() == "open"),
+        (
+            count for status, count in status_counts
+            if status.lower() == "open"
+        ),
         0
     )
 
@@ -411,3 +468,203 @@ def dashboard_summary(
             "recommendations": recommendations
         }
     }
+
+
+# ==========================================
+# PROJECT MANAGEMENT APIs
+# ==========================================
+
+# CREATE PROJECT
+@app.post("/projects", response_model=ProjectResponse)
+def create_new_project(
+    project: ProjectCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    return create_project(
+        db,
+        project,
+        current_user.id
+    )
+
+
+# GET ALL USER PROJECTS
+@app.get("/projects", response_model=list[ProjectResponse])
+def list_projects(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    return get_user_projects(
+        db,
+        current_user.id
+    )
+
+
+# GET PROJECT BY ID
+@app.get("/projects/{project_id}", response_model=ProjectResponse)
+def project_details(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = get_project(
+        db,
+        project_id,
+        current_user.id
+    )
+
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found"
+        )
+
+    return project
+
+
+# UPDATE PROJECT
+@app.put("/projects/{project_id}", response_model=ProjectResponse)
+def edit_project(
+    project_id: int,
+    updates: ProjectUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = get_project(
+        db,
+        project_id,
+        current_user.id
+    )
+
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found"
+        )
+
+    return update_project(
+        db,
+        project,
+        updates
+    )
+
+
+# DELETE PROJECT
+@app.delete("/projects/{project_id}")
+def remove_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = get_project(
+        db,
+        project_id,
+        current_user.id
+    )
+
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail="Project not found"
+        )
+
+    delete_project(db, project)
+
+    return {
+        "message": "Project deleted successfully"
+    }
+
+
+# TASK MANAGEMENT APIs
+
+@app.post("/tasks", response_model=TaskResponse)
+def create_new_task(
+    task: TaskCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Verify project ownership
+    project = db.query(Project).filter(
+        Project.id == task.project_id,
+        Project.owner_id == current_user.id
+    ).first()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Verify assigned user exists
+    if task.assigned_to is not None:
+        assigned_user = db.query(User).filter(
+            User.id == task.assigned_to
+        ).first()
+
+        if not assigned_user:
+            raise HTTPException(status_code=404, detail="Assigned user not found")
+
+    return create_task(db, task, current_user.id)
+
+
+@app.get("/tasks", response_model=list[TaskResponse])
+def list_tasks(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    return get_user_tasks(db, current_user.id)
+
+
+@app.get("/tasks/{task_id}", response_model=TaskResponse)
+def task_details(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    task = get_task(db, task_id, current_user.id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    return task
+
+
+@app.put("/tasks/{task_id}", response_model=TaskResponse)
+def edit_task(
+    task_id: int,
+    updates: TaskUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    task = get_task(db, task_id, current_user.id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    update_data = updates.model_dump(exclude_unset=True)
+
+    if "assigned_to" in update_data and updates.assigned_to is not None:
+        assigned_user = db.query(User).filter(
+            User.id == updates.assigned_to
+        ).first()
+
+        if not assigned_user:
+            raise HTTPException(status_code=404, detail="Assigned user not found")
+
+    return update_task(db, task, updates)
+
+
+@app.delete("/tasks/{task_id}")
+def remove_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    task = get_task(db, task_id, current_user.id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    delete_task(db, task)
+
+    return {"message": "Task deleted successfully"}
+
+
+

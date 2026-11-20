@@ -2,3 +2,16 @@ venv/                   # This prevents your database password from being upload
 __pycache__/
 .pytest_cache/
 .env
+# Frontend dependencies and build files
+**/node_modules/
+**/dist/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python generated files
+__pycache__/
+.pytest_cache/
+venv/
